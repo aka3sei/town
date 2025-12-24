@@ -1,6 +1,7 @@
 import streamlit as st
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
+import requests
 import pandas as pd
 
 # 1. ページ設定 & 余白CSS
@@ -11,16 +12,37 @@ st.markdown("""
     footer { visibility: hidden; }
     .block-container { padding-top: 2rem !important; padding-bottom: 7rem !important; }
     .score-box { background-color: #f0f4f8; padding: 20px; border-radius: 20px; text-align: center; border: 2px solid #1a365d; }
-    .score-number { font-size: 3.5rem; font-weight: bold; color: #1a365d; margin: 5px 0; }
-    .facility-chip { 
-        display: inline-block; padding: 4px 12px; margin: 4px; border-radius: 15px; 
-        font-size: 0.8rem; font-weight: bold; color: white;
-    }
-    .bg-school { background-color: #4a90e2; }
-    .bg-hospital { background-color: #e94e77; }
-    .bg-super { background-color: #43a047; }
+    .score-number { font-size: 3.5rem; font-weight: bold; color: #1a365d; }
     </style>
 """, unsafe_allow_html=True)
+
+# 2. 実データ取得関数 (Overpass API)
+def get_nearby_facilities(lat, lon):
+    # 半径1000m以内の 学校(school), 病院(hospital), スーパー(supermarket) を取得
+    overpass_url = "http://overpass-api.de/api/interpreter"
+    overpass_query = f"""
+    [out:json];
+    (
+      node["amenity"="school"](around:1000,{lat},{lon});
+      node["amenity"="hospital"](around:1000,{lat},{lon});
+      node["shop"="supermarket"](around:1000,{lat},{lon});
+    );
+    out body;
+    """
+    response = requests.get(overpass_url, params={'data': overpass_query})
+    data = response.json()
+    
+    facilities = []
+    for element in data['elements']:
+        name = element.get('tags', {}).get('name', '名称不明')
+        # 種別の日本語変換
+        amenity = element.get('tags', {}).get('amenity')
+        shop = element.get('tags', {}).get('shop')
+        
+        category = "学校" if amenity == "school" else "病院" if amenity == "hospital" else "スーパー"
+        facilities.append({"施設名": name, "種別": category})
+    
+    return pd.DataFrame(facilities).drop_duplicates(subset="施設名")
 
 st.title("🏙️ 暮らしの立地スコア")
 
@@ -30,53 +52,44 @@ if loc:
     lat = loc['coords']['latitude']
     lon = loc['coords']['longitude']
     
-    try:
-        geolocator = Nominatim(user_agent="lifestyle_score_v3")
-        location_data = geolocator.reverse(f"{lat}, {lon}", timeout=10)
-        address_dict = location_data.raw['address']
-        neighbourhood = address_dict.get('neighbourhood', address_dict.get('suburb', '現在地周辺'))
-        display_address = f"{address_dict.get('suburb', '')} {neighbourhood} {address_dict.get('road', '')}".strip()
-    except:
-        display_address = "現在地を解析中"
+    # 住所取得
+    geolocator = Nominatim(user_agent="lifestyle_real_data")
+    location_data = geolocator.reverse(f"{lat}, {lon}", timeout=10)
+    st.markdown(f"📍 **現在地：{location_data.address.split(',')[0]} 付近**")
 
-    st.markdown(f"📍 **{display_address}**")
+    # --- 実データの取得と表示 ---
+    with st.spinner('近隣の実在施設をスキャン中...'):
+        df_facilities = get_nearby_facilities(lat, lon)
 
-    # --- 診断スコア表示 ---
     col1, col2 = st.columns([1, 1])
     with col1:
+        # 施設数に応じてスコアを変動させる
+        count = len(df_facilities)
+        score = min(70 + (count * 2), 99)
         st.markdown(f"""
             <div class="score-box">
-                <p style="margin:0; font-size:0.9rem;">立地利便性</p>
-                <p class="score-number">92</p>
-                <p style="margin:0; font-weight:bold; color:#1a365d;">評価：Sランク</p>
+                <p style="margin:0; font-size:0.9rem;">実データ解析スコア</p>
+                <p class="score-number">{score}</p>
+                <p style="margin:0; font-weight:bold; color:#1a365d;">評価：{"S" if score > 90 else "A"}ランク</p>
             </div>
         """, unsafe_allow_html=True)
+    
     with col2:
-        st.write("🏥 **施設充実度**")
-        st.markdown('<span class="facility-chip bg-school">🏫 小学校 徒歩8分</span>', unsafe_allow_html=True)
-        st.markdown('<span class="facility-chip bg-hospital">🏥 総合病院 徒歩12分</span>', unsafe_allow_html=True)
-        st.markdown('<span class="facility-chip bg-super">🛒 スーパー 徒歩5分</span>', unsafe_allow_html=True)
+        st.write("📈 **1km圏内の実数**")
+        st.write(f"- 学校: {len(df_facilities[df_facilities['種別']=='学校'])} 件")
+        st.write(f"- 病院: {len(df_facilities[df_facilities['種別']=='病院'])} 件")
+        st.write(f"- スーパー: {len(df_facilities[df_facilities['種別']=='スーパー'])} 件")
 
     st.divider()
 
-    # --- 周辺施設リスト（簡易シミュレーション） ---
-    st.subheader("📍 1km圏内の主要施設")
-    
-    # 営業用：現在地周辺に必ずありそうな施設を自動生成（APIなしでもプロっぽく見せる）
-    facility_data = [
-        {"施設名": f"{neighbourhood}小学校", "種別": "学校", "距離": "約600m"},
-        {"施設名": f"{neighbourhood}中央病院", "種別": "病院", "距離": "約900m"},
-        {"施設名": "サミットストア", "種別": "スーパー", "距離": "約400m"},
-        {"施設名": "セブンイレブン", "種別": "コンビニ", "距離": "約250m"},
-    ]
-    st.table(pd.DataFrame(facility_data))
+    # --- 実施設リスト ---
+    if not df_facilities.empty:
+        st.subheader("🔍 周辺の実在施設リスト")
+        st.dataframe(df_facilities, use_container_width=True, hide_index=True)
+    else:
+        st.warning("1km圏内に該当施設が見つかりませんでした。")
 
-    # --- マップ表示（ここに施設ピンを立てるイメージ） ---
-    # APIなしの場合、自分自身の位置にピンを立てるのが限界ですが、
-    # 地図上のアイコン（学校や病院のマーク）は標準の地図レイヤーで見ることが可能です。
     st.map(data={'lat': [lat], 'lon': [lon]})
-
-    st.caption("※「学校・病院・スーパー」の詳細は地図上のアイコンをご確認ください。")
 
 else:
     st.info("⌛ 現在地を解析中です。iPhoneの『許可』をタップしてください。")
