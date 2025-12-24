@@ -17,7 +17,7 @@ st.markdown("""
     .score-details { font-size: 0.9rem; color: #2c5282; font-weight: bold; }
     
     /* リストのデザイン調整 */
-    .custom-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .custom-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: 10px; }
     .custom-table th { background-color: #1a365d; color: white; padding: 10px; text-align: left; }
     .custom-table td { border-bottom: 1px solid #ddd; padding: 10px; }
     </style>
@@ -27,7 +27,7 @@ st.markdown("""
 def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    # 公園(park)、郵便局(post_office)、銀行(bank)を含むクエリ
+    # 三鷹・深大寺エリアで確実に公園・郵便局を拾うためのクエリ
     overpass_query = f"""
     [out:json][timeout:30];
     (
@@ -54,7 +54,8 @@ def get_nearby_facilities_with_dist(lat, lon):
     if data and 'elements' in data:
         for element in data['elements']:
             tags = element.get('tags', {})
-            name = tags.get('name') or tags.get('brand')
+            # 名称を優先的に取得
+            name = tags.get('name') or tags.get('brand') or tags.get('operator')
             
             if not name or any(x in name for x in ['名称不明', '近隣施設', '不明な施設']):
                 continue
@@ -71,6 +72,7 @@ def get_nearby_facilities_with_dist(lat, lon):
             shop = tags.get('shop', '')
             leisure = tags.get('leisure', '')
             
+            # 【重要】ここの判定が漏れていると表示されません
             if amenity in ['school', 'college', 'university', 'kindergarten']:
                 category, cat_id = "🏫 学校", "school"
             elif amenity in ['hospital', 'clinic', 'doctors']:
@@ -108,20 +110,19 @@ if loc:
     with st.spinner('周辺施設を検索中...'):
         df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
-    # 【修正】公園・公共施設のカウント(n_public)を追加
+    # フィルタリングして個別にカウント
     if not df_facilities.empty:
         n_school = len(df_facilities[df_facilities['cat_id'] == 'school'])
         n_hospital = len(df_facilities[df_facilities['cat_id'] == 'hospital'])
         n_shop = len(df_facilities[df_facilities['cat_id'] == 'shop'])
         n_public = len(df_facilities[df_facilities['cat_id'] == 'public'])
         total_count = len(df_facilities)
-        # 件数が増えるのでスコア計算を調整（1件1点程度）
         score = min(55 + (total_count * 1.0), 99)
     else:
         n_school = n_hospital = n_shop = n_public = total_count = 0
         score = 50
 
-    # 【修正】スコア詳細に公園・公共を表示
+    # スコアボックス表示
     st.markdown(f"""
         <div class="score-box">
             <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
@@ -137,8 +138,10 @@ if loc:
     if total_count > 0:
         st.subheader(f"🔍 周辺施設一覧 ({total_count}件)")
         
-        display_df = df_facilities.drop(columns=["dist_raw", "cat_id"])
+        # 表示用の列のみ抽出
+        display_df = df_facilities[["施設名", "種別", "距離", "徒歩"]]
         
+        # HTMLでインデックスなしのテーブルを表示
         html_table = display_df.to_html(index=False, classes='custom-table', escape=False)
         st.markdown(html_table, unsafe_allow_html=True)
     else:
