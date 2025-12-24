@@ -17,45 +17,67 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 実データ取得と距離計算
+# 2. 実データ取得と距離計算（エラー対策強化版）
 def get_nearby_facilities_with_dist(lat, lon):
-    overpass_url = "http://overpass-api.de/api/interpreter"
+    # Overpass APIのエンドポイント（混雑時は日本に近いサーバーなどに変えることも可能ですが、まずは標準を強化）
+    overpass_url = "https://overpass-api.de/api/interpreter"
+    
+    # クエリにタイムアウトを設定し、正規表現で取得を効率化
     overpass_query = f"""
-    [out:json];
+    [out:json][timeout:30];
     (
-      node["amenity"="school"](around:1000,{lat},{lon});
-      node["amenity"="hospital"](around:1000,{lat},{lon});
+      node["amenity"~"school|hospital"](around:1000,{lat},{lon});
       node["shop"="supermarket"](around:1000,{lat},{lon});
     );
     out body;
     """
-    response = requests.get(overpass_url, params={'data': overpass_query})
-    data = response.json()
+    
+    try:
+        # 15秒待っても応答がなければタイムアウトさせる
+        response = requests.get(overpass_url, params={'data': overpass_query}, timeout=15)
+        response.raise_for_status() 
+        data = response.json()
+    except Exception as e:
+        # 通信エラーや混雑時にクラッシュさせず、ログを出して空のリストを返す
+        st.warning("⚠️ 現在、地図データサーバーが混雑しています。施設リストが表示されない場合は、少し時間を置いて再読み込みしてください。")
+        return pd.DataFrame()
     
     current_pos = (lat, lon)
     facilities = []
-    for element in data['elements']:
-        name = element.get('tags', {}).get('name', '名称不明')
-        f_lat, f_lon = element['lat'], element['lon']
-        
-        # 距離計算 (メートル)
-        dist_m = geodesic(current_pos, (f_lat, f_lon)).meters
-        walk_min = int(dist_m / 80) + 1 # 80m=1分で計算
-        
-        amenity = element.get('tags', {}).get('amenity')
-        category = "🏫 学校" if amenity == "school" else "🏥 病院" if amenity == "hospital" else "🛒 スーパー"
-        
-        facilities.append({
-            "施設名": name,
-            "種別": category,
-            "距離": f"{int(dist_m)}m",
-            "徒歩": f"約{walk_min}分",
-            "dist_raw": dist_m # ソート用
-        })
     
-    # 距離が近い順に並び替え
-    df = pd.DataFrame(facilities).sort_values("dist_raw").drop(columns=["dist_raw"])
-    return df.drop_duplicates(subset="施設名")
+    # 取得データの中身をチェック
+    if data and 'elements' in data:
+        for element in data['elements']:
+            tags = element.get('tags', {})
+            name = tags.get('name', tags.get('operator', '不明な施設'))
+            
+            # 座標がないデータはスキップ
+            if 'lat' not in element or 'lon' not in element:
+                continue
+                
+            f_lat, f_lon = element['lat'], element['lon']
+            
+            # 距離計算 (メートル)
+            dist_m = geodesic(current_pos, (f_lat, f_lon)).meters
+            walk_min = int(dist_m / 80) + 1 # 80m=1分
+            
+            amenity = tags.get('amenity')
+            category = "🏫 学校" if amenity == "school" else "🏥 病院" if amenity == "hospital" else "🛒 スーパー"
+            
+            facilities.append({
+                "施設名": name,
+                "種別": category,
+                "距離": f"{int(dist_m)}m",
+                "徒歩": f"約{walk_min}分",
+                "dist_raw": dist_m
+            })
+    
+    if not facilities:
+        return pd.DataFrame()
+
+    # 距離順にソートし、重複を排除
+    df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名").drop(columns=["dist_raw"])
+    return df
 
 st.title("🏙️ 暮らしの立地スコア")
 
@@ -96,3 +118,4 @@ if loc:
 
 else:
     st.info("⌛ 現在地を解析中です。iPhoneの『許可』をタップしてください。")
+
