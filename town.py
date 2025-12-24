@@ -1,7 +1,7 @@
 import streamlit as st
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
-from geopy.distance import geodesic # 距離計算用
+from geopy.distance import geodesic
 import requests
 import pandas as pd
 
@@ -17,57 +17,63 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 実データ取得と距離計算（エラー対策強化版）
+# 2. 【ここが差し込み部分】実データ取得と距離計算
 def get_nearby_facilities_with_dist(lat, lon):
-    # Overpass APIのエンドポイント（混雑時は日本に近いサーバーなどに変えることも可能ですが、まずは標準を強化）
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    # クエリにタイムアウトを設定し、正規表現で取得を効率化
+    # 検索対象を広げて件数を確保
     overpass_query = f"""
     [out:json][timeout:30];
     (
-      node["amenity"~"school|hospital"](around:1000,{lat},{lon});
-      node["shop"="supermarket"](around:1000,{lat},{lon});
+      node["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors"](around:1000,{lat},{lon});
+      node["shop"~"supermarket|convenience|drugstore"](around:1000,{lat},{lon});
     );
     out body;
     """
     
     try:
-        # 15秒待っても応答がなければタイムアウトさせる
         response = requests.get(overpass_url, params={'data': overpass_query}, timeout=15)
         response.raise_for_status() 
         data = response.json()
     except Exception as e:
-        # 通信エラーや混雑時にクラッシュさせず、ログを出して空のリストを返す
-        st.warning("⚠️ 現在、地図データサーバーが混雑しています。施設リストが表示されない場合は、少し時間を置いて再読み込みしてください。")
+        st.warning("⚠️ 地図データ取得中... 混雑時は表示に時間がかかる場合があります。")
         return pd.DataFrame()
     
     current_pos = (lat, lon)
     facilities = []
     
-    # 取得データの中身をチェック
     if data and 'elements' in data:
         for element in data['elements']:
             tags = element.get('tags', {})
-            name = tags.get('name', tags.get('operator', '不明な施設'))
+            name = tags.get('name', tags.get('brand', tags.get('amenity', tags.get('shop', '近隣施設'))))
             
-            # 座標がないデータはスキップ
             if 'lat' not in element or 'lon' not in element:
                 continue
                 
             f_lat, f_lon = element['lat'], element['lon']
-            
-            # 距離計算 (メートル)
             dist_m = geodesic(current_pos, (f_lat, f_lon)).meters
-            walk_min = int(dist_m / 80) + 1 # 80m=1分
             
-            amenity = tags.get('amenity')
-            category = "🏫 学校" if amenity == "school" else "🏥 病院" if amenity == "hospital" else "🛒 スーパー"
+            if dist_m > 1000:
+                continue
+
+            walk_min = int(dist_m / 80) + 1
+            
+            amenity = tags.get('amenity', '')
+            shop = tags.get('shop', '')
+            
+            if amenity in ['school', 'college', 'university', 'kindergarten']:
+                category = "🏫 学校"
+            elif amenity in ['hospital', 'clinic', 'doctors']:
+                category = "🏥 病院"
+            elif shop in ['supermarket', 'convenience', 'drugstore']:
+                category = "🛒 スーパー・買物"
+            else:
+                category = "📍 その他施設"
             
             facilities.append({
                 "施設名": name,
                 "種別": category,
-                "距離": f"{int(dist_m)}m",
+                "距離": f"約{int(dist_m)}m",
                 "徒歩": f"約{walk_min}分",
                 "dist_raw": dist_m
             })
@@ -75,10 +81,10 @@ def get_nearby_facilities_with_dist(lat, lon):
     if not facilities:
         return pd.DataFrame()
 
-    # 距離順にソートし、重複を排除
-    df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名").drop(columns=["dist_raw"])
-    return df
+    df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名")
+    return df.head(15).drop(columns=["dist_raw"])
 
+# 3. メイン画面の表示処理
 st.title("🏙️ 暮らしの立地スコア")
 
 loc = get_geolocation()
@@ -87,15 +93,18 @@ if loc:
     lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
     
     # 住所特定
-    geolocator = Nominatim(user_agent="lifestyle_real_data_v4")
-    location_data = geolocator.reverse(f"{lat}, {lon}", timeout=10)
-    st.markdown(f"📍 **現在地：{location_data.address.split(',')[0]} 付近**")
+    try:
+        geolocator = Nominatim(user_agent="lifestyle_real_data_v4")
+        location_data = geolocator.reverse(f"{lat}, {lon}", timeout=10)
+        st.markdown(f"📍 **現在地：{location_data.address.split(',')[0]} 付近**")
+    except:
+        st.markdown(f"📍 **現在地：解析中**")
 
     # データ取得
     with st.spinner('近隣施設との距離を計測中...'):
         df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
-    # --- スコア表示 ---
+    # スコア表示（施設数に応じた簡易計算）
     score = min(75 + (len(df_facilities) * 2), 99)
     st.markdown(f"""
         <div class="score-box">
@@ -107,7 +116,7 @@ if loc:
 
     st.divider()
 
-    # --- 施設リスト表示 ---
+    # 施設リスト表示
     if not df_facilities.empty:
         st.subheader("🔍 周辺の実在施設リスト (1km圏内)")
         st.dataframe(df_facilities, use_container_width=True, hide_index=True)
@@ -118,4 +127,3 @@ if loc:
 
 else:
     st.info("⌛ 現在地を解析中です。iPhoneの『許可』をタップしてください。")
-
