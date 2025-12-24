@@ -24,15 +24,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 2. 実データ取得
+# 2. 実データ取得（公園・公共施設・銀行を追加して件数を最大化）
 def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "https://overpass-api.de/api/interpreter"
+    
+    # 検索条件を大幅に強化：公園(park)、郵便局(post_office)、銀行(bank)を追加
     overpass_query = f"""
     [out:json][timeout:30];
     (
-      node["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors"](around:1200,{lat},{lon});
-      way["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors"](around:1200,{lat},{lon});
+      node["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors|post_office|bank"](around:1200,{lat},{lon});
+      way["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors|post_office|bank"](around:1200,{lat},{lon});
       node["shop"~"supermarket|convenience|drugstore"](around:1200,{lat},{lon});
       way["shop"~"supermarket|convenience|drugstore"](around:1200,{lat},{lon});
+      node["leisure"="park"](around:1200,{lat},{lon});
+      way["leisure"="park"](around:1200,{lat},{lon});
     );
     out center;
     """
@@ -65,13 +70,17 @@ def get_nearby_facilities_with_dist(lat, lon):
             
             amenity = tags.get('amenity', '')
             shop = tags.get('shop', '')
+            leisure = tags.get('leisure', '')
             
+            # カテゴリ分けの判定を強化
             if amenity in ['school', 'college', 'university', 'kindergarten']:
                 category, cat_id = "🏫 学校", "school"
             elif amenity in ['hospital', 'clinic', 'doctors']:
                 category, cat_id = "🏥 病院・クリニック", "hospital"
             elif shop in ['supermarket', 'convenience', 'drugstore']:
                 category, cat_id = "🛒 スーパー・買物", "shop"
+            elif amenity in ['post_office', 'bank'] or leisure == 'park':
+                category, cat_id = "🌳 公園・公共・銀行", "public"
             else:
                 continue
             
@@ -89,7 +98,6 @@ def get_nearby_facilities_with_dist(lat, lon):
     
     df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名")
     return df
-
 # 3. メイン画面
 st.title("🏙️ 暮らしの立地スコア")
 
@@ -139,3 +147,4 @@ if loc:
 
 else:
     st.info("⌛ 現在地を取得中です。iPhoneの画面で『許可』をタップしてください。")
+
