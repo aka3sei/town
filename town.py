@@ -32,7 +32,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏙️ 暮らしの立地スコア")
+st.title("🏙️ 暮らしの立地スコア（AI解析版）")
 st.caption("AI現在地解析：地点ごとの生活利便性と資産性を可視化")
 
 # 現在地の取得
@@ -94,4 +94,5 @@ if loc:
 
 else:
     st.info("⌛ 現在地を解析中です。iPhoneの画面上部に出る『許可』をタップしてください。")
+
 
