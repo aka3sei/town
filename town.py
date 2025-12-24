@@ -1,6 +1,7 @@
 import streamlit as st
 from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
+from geopy.distance import geodesic # 距離計算用
 import requests
 import pandas as pd
 
@@ -16,9 +17,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 実データ取得関数 (Overpass API)
-def get_nearby_facilities(lat, lon):
-    # 半径1000m以内の 学校(school), 病院(hospital), スーパー(supermarket) を取得
+# 2. 実データ取得と距離計算
+def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "http://overpass-api.de/api/interpreter"
     overpass_query = f"""
     [out:json];
@@ -32,62 +32,65 @@ def get_nearby_facilities(lat, lon):
     response = requests.get(overpass_url, params={'data': overpass_query})
     data = response.json()
     
+    current_pos = (lat, lon)
     facilities = []
     for element in data['elements']:
         name = element.get('tags', {}).get('name', '名称不明')
-        # 種別の日本語変換
-        amenity = element.get('tags', {}).get('amenity')
-        shop = element.get('tags', {}).get('shop')
+        f_lat, f_lon = element['lat'], element['lon']
         
-        category = "学校" if amenity == "school" else "病院" if amenity == "hospital" else "スーパー"
-        facilities.append({"施設名": name, "種別": category})
+        # 距離計算 (メートル)
+        dist_m = geodesic(current_pos, (f_lat, f_lon)).meters
+        walk_min = int(dist_m / 80) + 1 # 80m=1分で計算
+        
+        amenity = element.get('tags', {}).get('amenity')
+        category = "🏫 学校" if amenity == "school" else "🏥 病院" if amenity == "hospital" else "🛒 スーパー"
+        
+        facilities.append({
+            "施設名": name,
+            "種別": category,
+            "距離": f"{int(dist_m)}m",
+            "徒歩": f"約{walk_min}分",
+            "dist_raw": dist_m # ソート用
+        })
     
-    return pd.DataFrame(facilities).drop_duplicates(subset="施設名")
+    # 距離が近い順に並び替え
+    df = pd.DataFrame(facilities).sort_values("dist_raw").drop(columns=["dist_raw"])
+    return df.drop_duplicates(subset="施設名")
 
 st.title("🏙️ 暮らしの立地スコア")
 
 loc = get_geolocation()
 
 if loc:
-    lat = loc['coords']['latitude']
-    lon = loc['coords']['longitude']
+    lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
     
-    # 住所取得
-    geolocator = Nominatim(user_agent="lifestyle_real_data")
+    # 住所特定
+    geolocator = Nominatim(user_agent="lifestyle_real_data_v4")
     location_data = geolocator.reverse(f"{lat}, {lon}", timeout=10)
     st.markdown(f"📍 **現在地：{location_data.address.split(',')[0]} 付近**")
 
-    # --- 実データの取得と表示 ---
-    with st.spinner('近隣の実在施設をスキャン中...'):
-        df_facilities = get_nearby_facilities(lat, lon)
+    # データ取得
+    with st.spinner('近隣施設との距離を計測中...'):
+        df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        # 施設数に応じてスコアを変動させる
-        count = len(df_facilities)
-        score = min(70 + (count * 2), 99)
-        st.markdown(f"""
-            <div class="score-box">
-                <p style="margin:0; font-size:0.9rem;">実データ解析スコア</p>
-                <p class="score-number">{score}</p>
-                <p style="margin:0; font-weight:bold; color:#1a365d;">評価：{"S" if score > 90 else "A"}ランク</p>
-            </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.write("📈 **1km圏内の実数**")
-        st.write(f"- 学校: {len(df_facilities[df_facilities['種別']=='学校'])} 件")
-        st.write(f"- 病院: {len(df_facilities[df_facilities['種別']=='病院'])} 件")
-        st.write(f"- スーパー: {len(df_facilities[df_facilities['種別']=='スーパー'])} 件")
+    # --- スコア表示 ---
+    score = min(75 + (len(df_facilities) * 2), 99)
+    st.markdown(f"""
+        <div class="score-box">
+            <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
+            <p class="score-number">{score}</p>
+            <p style="margin:0; font-weight:bold; color:#1a365d;">評価：{"S" if score > 90 else "A"}ランク</p>
+        </div>
+    """, unsafe_allow_html=True)
 
     st.divider()
 
-    # --- 実施設リスト ---
+    # --- 施設リスト表示 ---
     if not df_facilities.empty:
-        st.subheader("🔍 周辺の実在施設リスト")
+        st.subheader("🔍 周辺の実在施設リスト (1km圏内)")
         st.dataframe(df_facilities, use_container_width=True, hide_index=True)
     else:
-        st.warning("1km圏内に該当施設が見つかりませんでした。")
+        st.warning("1km圏内に実在施設が見つかりませんでした。")
 
     st.map(data={'lat': [lat], 'lon': [lon]})
 
