@@ -20,27 +20,24 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 実データ取得 (公園と郵便局の判定を最優先に強化)
+# 2. 実データ取得
 def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    # 公園や公共施設を確実につかむための広域・多角的なクエリ
     overpass_query = f"""
     [out:json][timeout:30];
     (
-      node["amenity"~"school|kindergarten|hospital|clinic|post_office|bank"](around:1200,{lat},{lon});
-      way["amenity"~"school|kindergarten|hospital|clinic|post_office|bank"](around:1200,{lat},{lon});
+      node["amenity"~"school|kindergarten|hospital|clinic|doctors|post_office|bank"](around:1200,{lat},{lon});
+      way["amenity"~"school|kindergarten|hospital|clinic|doctors|post_office|bank"](around:1200,{lat},{lon});
       node["shop"~"supermarket|convenience|drugstore"](around:1200,{lat},{lon});
       way["shop"~"supermarket|convenience|drugstore"](around:1200,{lat},{lon});
       node["leisure"="park"](around:1200,{lat},{lon});
       way["leisure"="park"](around:1200,{lat},{lon});
-      node["boundary"="park"](around:1200,{lat},{lon});
     );
     out center;
     """
     
     try:
-        # キャッシュを回避するためにランダムなパラメータを付与（推奨）
         response = requests.get(overpass_url, params={'data': overpass_query}, timeout=20)
         response.raise_for_status() 
         data = response.json()
@@ -53,7 +50,6 @@ def get_nearby_facilities_with_dist(lat, lon):
     if data and 'elements' in data:
         for element in data['elements']:
             tags = element.get('tags', {})
-            # 公園は名前がない場合も多いので、その場合は「近隣の公園」とする
             name = tags.get('name') or tags.get('brand') or tags.get('operator')
             
             f_lat = element.get('lat') or element.get('center', {}).get('lat')
@@ -68,20 +64,22 @@ def get_nearby_facilities_with_dist(lat, lon):
             shop = tags.get('shop', '')
             leisure = tags.get('leisure', '')
             
-            # カテゴリ判定
+            # カテゴリ判定を分離
             if amenity in ['school', 'kindergarten', 'college', 'university']:
                 category, cat_id = "🏫 学校", "school"
             elif amenity in ['hospital', 'clinic', 'doctors']:
                 category, cat_id = "🏥 病院", "hospital"
             elif shop in ['supermarket', 'convenience', 'drugstore']:
                 category, cat_id = "🛒 買物", "shop"
-            elif amenity in ['post_office', 'bank'] or leisure == 'park' or tags.get('boundary') == 'park':
-                category, cat_id = "🌳 公園・公共", "public"
+            elif amenity in ['post_office', 'bank']:
+                category, cat_id = "📮 郵便局・銀行", "post" # 郵便局を独立
+            elif leisure == 'park':
+                category, cat_id = "🌳 公園", "park" # 公園を独立
                 if not name: name = "近隣の公園・広場"
             else:
                 continue
             
-            if not name: continue # 名前も種別もないものは除外
+            if not name: continue
 
             facilities.append({
                 "施設名": name,
@@ -95,7 +93,6 @@ def get_nearby_facilities_with_dist(lat, lon):
     if not facilities: 
         return pd.DataFrame(columns=["施設名", "種別", "距離", "徒歩", "dist_raw", "cat_id"])
     
-    # 施設名で重複排除し、距離順にソート
     df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名")
     return df
 
@@ -114,19 +111,21 @@ if loc:
         n_school = len(df_facilities[df_facilities['cat_id'] == 'school'])
         n_hospital = len(df_facilities[df_facilities['cat_id'] == 'hospital'])
         n_shop = len(df_facilities[df_facilities['cat_id'] == 'shop'])
-        n_public = len(df_facilities[df_facilities['cat_id'] == 'public'])
+        n_post = len(df_facilities[df_facilities['cat_id'] == 'post']) # 郵便局
+        n_park = len(df_facilities[df_facilities['cat_id'] == 'park']) # 公園
         total_count = len(df_facilities)
-        score = min(55 + (total_count * 1.0), 99)
+        score = min(55 + (total_count * 0.8), 99)
     else:
-        n_school = n_hospital = n_shop = n_public = total_count = 0
+        n_school = n_hospital = n_shop = n_post = n_park = total_count = 0
         score = 50
 
+    # スコアボックスの表示（5項目に拡張）
     st.markdown(f"""
         <div class="score-box">
             <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
             <p class="score-number">{int(score)}</p>
             <p class="score-details">
-                🏫学:{n_school} / 🏥病:{n_hospital} / 🛒商:{n_shop} / 🌳公:{n_public}
+                🏫学:{n_school} / 🏥病:{n_hospital} / 🛒商:{n_shop} / 📮郵:{n_post} / 🌳公:{n_park}
             </p>
         </div>
     """, unsafe_allow_html=True)
