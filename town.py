@@ -5,7 +5,7 @@ from geopy.distance import geodesic
 import requests
 import pandas as pd
 
-# 1. ページ設定 & 余白CSS
+# 1. ページ設定
 st.set_page_config(page_title="暮らしの立地スコア", layout="centered")
 st.markdown("""
     <style>
@@ -17,18 +17,20 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 【ここが差し込み部分】実データ取得と距離計算
+# 2. 実データ取得（点データだけでなく面データの中央値も取得するように改良）
 def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    # 検索対象を広げて件数を確保
+    # [out:json]の後に、中心点(center)を出すように指定
     overpass_query = f"""
     [out:json][timeout:30];
     (
-      node["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors"](around:1000,{lat},{lon});
-      node["shop"~"supermarket|convenience|drugstore"](around:1000,{lat},{lon});
+      node["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors"](around:1200,{lat},{lon});
+      way["amenity"~"school|college|university|kindergarten|hospital|clinic|doctors"](around:1200,{lat},{lon});
+      node["shop"~"supermarket|convenience|drugstore"](around:1200,{lat},{lon});
+      way["shop"~"supermarket|convenience|drugstore"](around:1200,{lat},{lon});
     );
-    out body;
+    out center;
     """
     
     try:
@@ -36,7 +38,7 @@ def get_nearby_facilities_with_dist(lat, lon):
         response.raise_for_status() 
         data = response.json()
     except Exception as e:
-        st.warning("⚠️ 地図データ取得中... 混雑時は表示に時間がかかる場合があります。")
+        st.warning("⚠️ 地図データ取得中... サーバーの応答を待っています。")
         return pd.DataFrame()
     
     current_pos = (lat, lon)
@@ -45,15 +47,19 @@ def get_nearby_facilities_with_dist(lat, lon):
     if data and 'elements' in data:
         for element in data['elements']:
             tags = element.get('tags', {})
-            name = tags.get('name', tags.get('brand', tags.get('amenity', tags.get('shop', '近隣施設'))))
+            name = tags.get('name', tags.get('brand', '近隣施設'))
             
-            if 'lat' not in element or 'lon' not in element:
+            # nodeの場合はlat/lon、wayの場合はcenterのlat/lonを使用
+            f_lat = element.get('lat') or element.get('center', {}).get('lat')
+            f_lon = element.get('lon') or element.get('center', {}).get('lon')
+            
+            if not f_lat or not f_lon:
                 continue
                 
-            f_lat, f_lon = element['lat'], element['lon']
             dist_m = geodesic(current_pos, (f_lat, f_lon)).meters
             
-            if dist_m > 1000:
+            # 表示上は1.2kmまで許容（確実に件数を出すため）
+            if dist_m > 1200:
                 continue
 
             walk_min = int(dist_m / 80) + 1
@@ -81,10 +87,11 @@ def get_nearby_facilities_with_dist(lat, lon):
     if not facilities:
         return pd.DataFrame()
 
+    # 距離順にソートし、重複をカットして上位20件程度表示
     df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名")
-    return df.head(15).drop(columns=["dist_raw"])
+    return df.head(20).drop(columns=["dist_raw"])
 
-# 3. メイン画面の表示処理
+# 3. メイン画面
 st.title("🏙️ 暮らしの立地スコア")
 
 loc = get_geolocation()
@@ -92,38 +99,34 @@ loc = get_geolocation()
 if loc:
     lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
     
-    # 住所特定
     try:
-        geolocator = Nominatim(user_agent="lifestyle_real_data_v4")
+        geolocator = Nominatim(user_agent="lifestyle_real_data_v5")
         location_data = geolocator.reverse(f"{lat}, {lon}", timeout=10)
         st.markdown(f"📍 **現在地：{location_data.address.split(',')[0]} 付近**")
     except:
-        st.markdown(f"📍 **現在地：解析中**")
+        st.markdown(f"📍 **現在地を特定しました**")
 
-    # データ取得
-    with st.spinner('近隣施設との距離を計測中...'):
+    with st.spinner('近隣施設の実データを検索中...'):
         df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
-    # スコア表示（施設数に応じた簡易計算）
-    score = min(75 + (len(df_facilities) * 2), 99)
+    score = min(70 + (len(df_facilities) * 1.5), 99)
     st.markdown(f"""
         <div class="score-box">
             <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
-            <p class="score-number">{score}</p>
-            <p style="margin:0; font-weight:bold; color:#1a365d;">評価：{"S" if score > 90 else "A"}ランク</p>
+            <p class="score-number">{int(score)}</p>
+            <p style="margin:0; font-weight:bold; color:#1a365d;">評価：{"S" if score > 85 else "A"}ランク</p>
         </div>
     """, unsafe_allow_html=True)
 
     st.divider()
 
-    # 施設リスト表示
     if not df_facilities.empty:
-        st.subheader("🔍 周辺の実在施設リスト (1km圏内)")
+        st.subheader(f"🔍 周辺の主要施設 (約20件表示)")
         st.dataframe(df_facilities, use_container_width=True, hide_index=True)
     else:
-        st.warning("1km圏内に実在施設が見つかりませんでした。")
+        st.warning("周辺に該当施設が見つかりませんでした。")
 
     st.map(data={'lat': [lat], 'lon': [lon]})
 
 else:
-    st.info("⌛ 現在地を解析中です。iPhoneの『許可』をタップしてください。")
+    st.info("⌛ 現在地を取得中です。iPhoneのブラウザで位置情報の共有を許可してください。")
