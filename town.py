@@ -15,7 +15,7 @@ st.markdown("""
     .score-box { background-color: #f0f4f8; padding: 20px; border-radius: 20px; text-align: center; border: 2px solid #1a365d; }
     .score-number { font-size: 3.5rem; font-weight: bold; color: #1a365d; line-height: 1; margin-bottom: 10px; }
     .score-details { font-size: 0.9rem; color: #2c5282; font-weight: bold; }
-    /* テーブルのスクロールを無効化して全件表示 */
+    /* テーブルを固定で全表示 */
     div[data-testid="stDataFrame"] > div { height: auto !important; }
     </style>
 """, unsafe_allow_html=True)
@@ -47,10 +47,10 @@ def get_nearby_facilities_with_dist(lat, lon):
     if data and 'elements' in data:
         for element in data['elements']:
             tags = element.get('tags', {})
-            
-            # 【修正】名称がないものはスキップ
             name = tags.get('name') or tags.get('brand')
-            if not name or name in ['名称不明', '近隣施設', '不明な施設']:
+            
+            # 名称不明の除外
+            if not name or any(x in name for x in ['名称不明', '近隣施設', '不明な施設']):
                 continue
             
             f_lat = element.get('lat') or element.get('center', {}).get('lat')
@@ -65,14 +65,11 @@ def get_nearby_facilities_with_dist(lat, lon):
             shop = tags.get('shop', '')
             
             if amenity in ['school', 'college', 'university', 'kindergarten']:
-                category = "🏫 学校"
-                cat_id = "school"
+                category, cat_id = "🏫 学校", "school"
             elif amenity in ['hospital', 'clinic', 'doctors']:
-                category = "🏥 病院・クリニック"
-                cat_id = "hospital"
+                category, cat_id = "🏥 病院・クリニック", "hospital"
             elif shop in ['supermarket', 'convenience', 'drugstore']:
-                category = "🛒 スーパー・買物"
-                cat_id = "shop"
+                category, cat_id = "🛒 スーパー・買物", "shop"
             else:
                 continue
             
@@ -85,7 +82,10 @@ def get_nearby_facilities_with_dist(lat, lon):
                 "cat_id": cat_id
             })
     
-    if not facilities: return pd.DataFrame()
+    if not facilities: 
+        # 空の場合でも列名だけ定義したDataFrameを返す
+        return pd.DataFrame(columns=["施設名", "種別", "距離", "徒歩", "dist_raw", "cat_id"])
+    
     df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名")
     return df
 
@@ -97,19 +97,20 @@ loc = get_geolocation()
 if loc:
     lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
     
-    with st.spinner('全施設データを抽出中...'):
+    with st.spinner('周辺施設を検索中...'):
         df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
-    # 件数の集計
-    n_school = len(df_facilities[df_facilities['cat_id'] == 'school'])
-    n_hospital = len(df_facilities[df_facilities['cat_id'] == 'hospital'])
-    n_shop = len(df_facilities[df_facilities['cat_id'] == 'shop'])
-    total_count = len(df_facilities)
+    # 【修正】集計前にデータがあるかチェック（KeyError対策）
+    if not df_facilities.empty:
+        n_school = len(df_facilities[df_facilities['cat_id'] == 'school'])
+        n_hospital = len(df_facilities[df_facilities['cat_id'] == 'hospital'])
+        n_shop = len(df_facilities[df_facilities['cat_id'] == 'shop'])
+        total_count = len(df_facilities)
+        score = min(60 + (total_count * 1.2), 99)
+    else:
+        n_school = n_hospital = n_shop = total_count = 0
+        score = 50
 
-    # スコア計算
-    score = min(60 + (total_count * 1.2), 99)
-    
-    # 【修正】内訳を表示するスコアボックス
     st.markdown(f"""
         <div class="score-box">
             <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
@@ -122,13 +123,13 @@ if loc:
 
     st.divider()
 
-    if not df_facilities.empty:
+    if total_count > 0:
         st.subheader(f"🔍 周辺施設一覧 ({total_count}件)")
-        # 【修正】heightを指定せず、全件表示
+        # インデックスと不要な列を隠して全表示
         display_df = df_facilities.drop(columns=["dist_raw", "cat_id"])
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.table(display_df) # dataframeよりtableの方がスマホで全件固定表示が安定します
     else:
-        st.warning("周辺に該当施設が見つかりませんでした。")
+        st.warning("周辺1.2km以内に該当施設が見つかりませんでした。")
 
     st.map(data={'lat': [lat], 'lon': [lon]})
 
