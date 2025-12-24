@@ -24,11 +24,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 2. 実データ取得
-# 2. 実データ取得（公園・公共施設・銀行を追加して件数を最大化）
 def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "https://overpass-api.de/api/interpreter"
     
-    # 検索条件を大幅に強化：公園(park)、郵便局(post_office)、銀行(bank)を追加
+    # 公園(park)、郵便局(post_office)、銀行(bank)を含むクエリ
     overpass_query = f"""
     [out:json][timeout:30];
     (
@@ -72,7 +71,6 @@ def get_nearby_facilities_with_dist(lat, lon):
             shop = tags.get('shop', '')
             leisure = tags.get('leisure', '')
             
-            # カテゴリ分けの判定を強化
             if amenity in ['school', 'college', 'university', 'kindergarten']:
                 category, cat_id = "🏫 学校", "school"
             elif amenity in ['hospital', 'clinic', 'doctors']:
@@ -98,6 +96,7 @@ def get_nearby_facilities_with_dist(lat, lon):
     
     df = pd.DataFrame(facilities).sort_values("dist_raw").drop_duplicates(subset="施設名")
     return df
+
 # 3. メイン画面
 st.title("🏙️ 暮らしの立地スコア")
 
@@ -109,22 +108,26 @@ if loc:
     with st.spinner('周辺施設を検索中...'):
         df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
+    # 【修正】公園・公共施設のカウント(n_public)を追加
     if not df_facilities.empty:
         n_school = len(df_facilities[df_facilities['cat_id'] == 'school'])
         n_hospital = len(df_facilities[df_facilities['cat_id'] == 'hospital'])
         n_shop = len(df_facilities[df_facilities['cat_id'] == 'shop'])
+        n_public = len(df_facilities[df_facilities['cat_id'] == 'public'])
         total_count = len(df_facilities)
-        score = min(60 + (total_count * 1.2), 99)
+        # 件数が増えるのでスコア計算を調整（1件1点程度）
+        score = min(55 + (total_count * 1.0), 99)
     else:
-        n_school = n_hospital = n_shop = total_count = 0
+        n_school = n_hospital = n_shop = n_public = total_count = 0
         score = 50
 
+    # 【修正】スコア詳細に公園・公共を表示
     st.markdown(f"""
         <div class="score-box">
             <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
             <p class="score-number">{int(score)}</p>
             <p class="score-details">
-                🏫学校:{n_school} / 🏥病院:{n_hospital} / 🛒買物:{n_shop}
+                🏫学:{n_school} / 🏥病:{n_hospital} / 🛒商:{n_shop} / 🌳公:{n_public}
             </p>
         </div>
     """, unsafe_allow_html=True)
@@ -134,10 +137,8 @@ if loc:
     if total_count > 0:
         st.subheader(f"🔍 周辺施設一覧 ({total_count}件)")
         
-        # 不要な列を削除
         display_df = df_facilities.drop(columns=["dist_raw", "cat_id"])
         
-        # HTML形式に変換して番号(index)を非表示にする
         html_table = display_df.to_html(index=False, classes='custom-table', escape=False)
         st.markdown(html_table, unsafe_allow_html=True)
     else:
@@ -147,4 +148,3 @@ if loc:
 
 else:
     st.info("⌛ 現在地を取得中です。iPhoneの画面で『許可』をタップしてください。")
-
