@@ -3,7 +3,7 @@ from streamlit_js_eval import get_geolocation
 from geopy.geocoders import Nominatim
 
 # 1. ページ設定 & 完璧な余白CSS（ネイビー・知性テーマ）
-st.set_page_config(page_title="暮らしの立地スコア", layout="centered")
+st.set_page_config(page_title="暮らしの立地スコア（AI解析版）", layout="centered")
 st.markdown("""
     <style>
     header[data-testid="stHeader"] { visibility: hidden; display: none; }
@@ -94,3 +94,4 @@ if loc:
 
 else:
     st.info("⌛ 現在地を解析中です。iPhoneの画面上部に出る『許可』をタップしてください。")
+
