@@ -24,6 +24,7 @@ st.markdown("""
 def get_nearby_facilities_with_dist(lat, lon):
     overpass_url = "https://overpass-api.de/api/interpreter"
     
+    # 公園と郵便局を確実に分けるためのクエリ
     overpass_query = f"""
     [out:json][timeout:30];
     (
@@ -38,6 +39,7 @@ def get_nearby_facilities_with_dist(lat, lon):
     """
     
     try:
+        # キャッシュ対策でタイムアウトを長めに設定
         response = requests.get(overpass_url, params={'data': overpass_query}, timeout=20)
         response.raise_for_status() 
         data = response.json()
@@ -64,18 +66,18 @@ def get_nearby_facilities_with_dist(lat, lon):
             shop = tags.get('shop', '')
             leisure = tags.get('leisure', '')
             
-            # カテゴリ判定を分離
-            if amenity in ['school', 'kindergarten', 'college', 'university']:
+            # --- カテゴリ判定ロジック（ここを厳密化） ---
+            if amenity in ['post_office', 'bank']:
+                category, cat_id = "📮 郵便局・銀行", "post"
+            elif leisure == 'park':
+                category, cat_id = "🌳 公園", "park"
+                if not name: name = "近隣の公園・広場"
+            elif amenity in ['school', 'kindergarten', 'college', 'university']:
                 category, cat_id = "🏫 学校", "school"
             elif amenity in ['hospital', 'clinic', 'doctors']:
                 category, cat_id = "🏥 病院", "hospital"
             elif shop in ['supermarket', 'convenience', 'drugstore']:
                 category, cat_id = "🛒 買物", "shop"
-            elif amenity in ['post_office', 'bank']:
-                category, cat_id = "📮 郵便局・銀行", "post" # 郵便局を独立
-            elif leisure == 'park':
-                category, cat_id = "🌳 公園", "park" # 公園を独立
-                if not name: name = "近隣の公園・広場"
             else:
                 continue
             
@@ -107,19 +109,20 @@ if loc:
     with st.spinner('周辺施設を徹底スキャン中...'):
         df_facilities = get_nearby_facilities_with_dist(lat, lon)
 
+    # 各カテゴリのカウントを確実に行う
     if not df_facilities.empty:
-        n_school = len(df_facilities[df_facilities['cat_id'] == 'school'])
+        n_school   = len(df_facilities[df_facilities['cat_id'] == 'school'])
         n_hospital = len(df_facilities[df_facilities['cat_id'] == 'hospital'])
-        n_shop = len(df_facilities[df_facilities['cat_id'] == 'shop'])
-        n_post = len(df_facilities[df_facilities['cat_id'] == 'post']) # 郵便局
-        n_park = len(df_facilities[df_facilities['cat_id'] == 'park']) # 公園
+        n_shop     = len(df_facilities[df_facilities['cat_id'] == 'shop'])
+        n_post     = len(df_facilities[df_facilities['cat_id'] == 'post']) # 郵便局
+        n_park     = len(df_facilities[df_facilities['cat_id'] == 'park']) # 公園
         total_count = len(df_facilities)
         score = min(55 + (total_count * 0.8), 99)
     else:
         n_school = n_hospital = n_shop = n_post = n_park = total_count = 0
         score = 50
 
-    # スコアボックスの表示（5項目に拡張）
+    # スコアボックス表示
     st.markdown(f"""
         <div class="score-box">
             <p style="margin:0; font-size:0.9rem;">実測データ解析スコア</p>
@@ -141,6 +144,5 @@ if loc:
         st.warning("周辺1.2km以内に施設が見つかりませんでした。")
 
     st.map(data={'lat': [lat], 'lon': [lon]})
-
 else:
     st.info("⌛ 現在地を取得中です...")
